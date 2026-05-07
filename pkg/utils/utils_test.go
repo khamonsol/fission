@@ -18,8 +18,12 @@ package utils
 
 import (
 	"bytes"
+	"context"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -205,5 +209,56 @@ func TestGetIntValueFromEnv(t *testing.T) {
 				return
 			}
 		})
+	}
+}
+
+func TestDownloadUrl_FileModeIs0600(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("payload"))
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "out.bin")
+	if err := DownloadUrl(context.Background(), srv.Client(), srv.URL, dst); err != nil {
+		t.Fatalf("DownloadUrl: %v", err)
+	}
+	fi, err := os.Stat(dst)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode: got %#o, want 0600", got)
+	}
+}
+
+func TestDownloadUrl_OverwriteAllowed(t *testing.T) {
+	// Ensures the refactor preserved os.Create's overwrite semantics —
+	// re-downloading to the same path must succeed.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("v2"))
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "out.bin")
+	if err := os.WriteFile(dst, []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := DownloadUrl(context.Background(), srv.Client(), srv.URL, dst); err != nil {
+		t.Fatalf("DownloadUrl on existing path: %v", err)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil || string(got) != "v2" {
+		t.Fatalf("expected overwrite to v2, got %q (err=%v)", got, err)
+	}
+	// Mode must be tightened to 0o600 even when overwriting a pre-existing
+	// file with a broader mode — fchmod after OpenFile closes that window.
+	fi, err := os.Stat(dst)
+	if err != nil {
+		t.Fatalf("Stat after overwrite: %v", err)
+	}
+	if mode := fi.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("mode after overwrite: got %#o, want 0600", mode)
 	}
 }

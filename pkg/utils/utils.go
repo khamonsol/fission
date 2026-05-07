@@ -190,25 +190,27 @@ func DownloadUrl(ctx context.Context, httpClient *http.Client, targetURL string,
 		return errors.New(resp.Status)
 	}
 
-	w, err := os.Create(localPath)
+	w, err := os.OpenFile(localPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
 	defer w.Close()
 
-	_, err = io.Copy(w, resp.Body)
-	if err != nil {
+	// Force 0o600 even on the overwrite-existing-file path. OpenFile's mode
+	// argument is honoured only on file creation; if localPath pre-existed
+	// with a broader mode (an attacker could pre-create with 0o644), the
+	// file would retain that mode after truncation. fchmod via the open fd
+	// closes that window before any data is written.
+	if err = w.Chmod(0o600); err != nil {
+		return err
+	}
+
+	if _, err = io.Copy(w, resp.Body); err != nil {
 		return err
 	}
 
 	// flushing write buffer to file
-	err = w.Sync()
-	if err != nil {
-		return err
-	}
-
-	err = os.Chmod(localPath, 0600)
-	if err != nil {
+	if err = w.Sync(); err != nil {
 		return err
 	}
 
