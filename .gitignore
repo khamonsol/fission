@@ -42,3 +42,7 @@ cosign.key
 
 # Dumps
 .dumps/
+
+# SAST scan artefacts (SARIF reports)
+output.sarif
+*.sarif
